@@ -1,98 +1,128 @@
 import psycopg2
-from config import *
+
+from users.partner import Partner
+from users.user import User
+from config.settings import *
 
 connection = psycopg2.connect(
     host=host,
     user=user,
     password=password,
-    database=db_name
+    dbname=database,
+    port=5432
 )
-
 connection.autocommit = True
 
 
-def create_table_users():
-    """СОЗДАНИЕ ТАБЛИЦЫ USERS (НАЙДЕННЫЕ ПОЛЬЗОВАТЕЛИ"""
+# Создаем базы данных пользователей, которые общаются с ботом
+def db_create_users():
     with connection.cursor() as cursor:
         cursor.execute(
             """CREATE TABLE IF NOT EXISTS users(
                 id serial,
-                first_name varchar(50) NOT NULL,
-                last_name varchar(25) NOT NULL,
-                vk_id varchar(20) NOT NULL PRIMARY KEY,
-                vk_link varchar(50));"""
+                vk_id varchar(30) PRIMARY KEY,
+                city_id varchar(100) NOT NULL,
+                age integer NOT NULL,
+                sex varchar(100) NOT NULL);"""
         )
-    print("[INFO] Table USERS was created.")
+    print("[+] Table users created")
 
 
-def create_table_seen_users():  # references users(vk_id)
-    """СОЗДАНИЕ ТАБЛИЦЫ SEEN_USERS (ПРОСМОТРЕННЫЕ ПОЛЬЗОВАТЕЛИ"""
+# Добавляем пользователя
+def db_insert_user(user: User):
+    with connection.cursor() as cursor:
+        # check user exist
+        cursor.execute(
+            f"""SELECT id FROM users WHERE vk_id = '{user.id}';"""
+        )
+        id = cursor.fetchone()
+        if id:
+            print(f"[-] User with vk_id={user.id} already exist")
+            return
+        # insert
+        cursor.execute(
+            f"""INSERT INTO users (vk_id, city_id, age, sex) 
+            VALUES ('{user.id}', '{user.city_id}', '{user.age}', '{user.sex}');"""
+        )
+        print(f"[+] User with vk_id={user.id} inserted")
+
+
+# Cоздаем таблицу с просмотренными партнерами
+def db_create_partners():
     with connection.cursor() as cursor:
         cursor.execute(
-            """CREATE TABLE IF NOT EXISTS seen_users(
-            id serial,
-            vk_id varchar(50) PRIMARY KEY);"""
+            """CREATE TABLE IF NOT EXISTS partners(
+                id serial,
+                vk_id varchar(30) PRIMARY KEY,
+                first_name varchar(100) NOT NULL,
+                last_name varchar(100) NOT NULL,
+                main_photo varchar (256) NOT NULL,
+                profile_url varchar(200));"""
         )
-    print("[INFO] Table SEEN_USERS was created.")
+    print("[+] Table partners created")
 
 
-def insert_data_users(first_name, last_name, vk_id, vk_link):
-    """ВСТАВКА ДАННЫХ В ТАБЛИЦУ USERS"""
+# Добавляем просмотренного партнёра
+def db_insert_partner(partner: Partner):
+    with connection.cursor() as cursor:
+        # check partner exist
+        cursor.execute(
+            f"""SELECT id FROM partners WHERE vk_id = '{partner.id}';"""
+        )
+        id = cursor.fetchone()
+        if id:
+            print(f"[-] Partner with vk_id={partner.id} already exist")
+            return
+        # insert
+        cursor.execute(
+            f"""INSERT INTO partners (vk_id, first_name, last_name, main_photo, profile_url) 
+            VALUES ('{partner.id}', '{partner.first_name}', '{partner.last_name}', '{partner.main_photo}', '{partner.profile_url}');"""
+        )
+        print(f"[+] Partner with vk_id={partner.id} inserted")
+
+
+def db_create_users_partners():
     with connection.cursor() as cursor:
         cursor.execute(
-            f"""INSERT INTO users (first_name, last_name, vk_id, vk_link) 
-            VALUES ('{first_name}', '{last_name}', '{vk_id}', '{vk_link}');"""
+            """CREATE TABLE IF NOT EXISTS users_partners(
+                user_vk_id varchar(30) NOT NULL REFERENCES users(vk_id),
+                partner_vk_id varchar(30) NOT NULL REFERENCES partners(vk_id));"""
         )
+    print("[+] Table partners created")
 
 
-def insert_data_seen_users(vk_id, offset):
-    """ВСТАВКА ДАННЫХ В ТАБЛИЦУ SEEN_USERS"""
+# Добавляем просмотренных партнеров пользователем
+def db_insert_user_partner(user_vk_id, partner_vk_id):
     with connection.cursor() as cursor:
         cursor.execute(
-            f"""INSERT INTO seen_users (vk_id) 
-            VALUES ('{vk_id}')
-            OFFSET '{offset}';"""
+            f"""INSERT INTO users_partners (user_vk_id, partner_vk_id) 
+            VALUES ('{user_vk_id}', '{partner_vk_id}');"""
         )
 
 
-def select(offset):
-    """ВЫБОРКА ИЗ НЕПРОСМОТРЕННЫХ ЛЮДЕЙ"""
+# Проверка, показывали ли мы партнера пользователю ранее
+def db_check_is_new_partner(user_id, partner_id) -> bool:
     with connection.cursor() as cursor:
+        # check partner exist
         cursor.execute(
-            f"""SELECT u.first_name,
-                        u.last_name,
-                        u.vk_id,
-                        u.vk_link,
-                        su.vk_id
-                        FROM users AS u
-                        LEFT JOIN seen_users AS su 
-                        ON u.vk_id = su.vk_id
-                        WHERE su.vk_id IS NULL
-                        OFFSET '{offset}';"""
+            f"""SELECT * FROM users_partners WHERE user_vk_id = '{user_id}' AND partner_vk_id = '{partner_id}';"""
         )
-        return cursor.fetchone()
+        # Партнер старый
+        if cursor.fetchone():
+            print(f"[INFO] user with id = {partner_id} was already showed previously")
+            return False
+        # Партнер новый
+        return True
 
 
-def drop_users():
-    """УДАЛЕНИЕ ТАБЛИЦЫ USERS КАСКАДОМ"""
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """DROP TABLE IF EXISTS users CASCADE;"""
-        )
-        print('[INFO] Table USERS was deleted.')
+def init_database():
+    # Cоздать таблицу users
+    db_create_users()
+    # Создать табилцу partners
+    db_create_partners()
+    # Cоздать таблицу users_partners
+    db_create_users_partners()
 
 
-def drop_seen_users():
-    """УДАЛЕНИЕ ТАБЛИЦЫ SEEN_USERS КАСКАДОМ"""
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """DROP TABLE  IF EXISTS seen_users CASCADE;"""
-        )
-        print('[INFO] Table SEEN_USERS was deleted.')
-
-
-def creating_database():
-    drop_users()
-    drop_seen_users()
-    create_table_users()
-    create_table_seen_users()
+if __name__ == '__main__':
+    init_database()
